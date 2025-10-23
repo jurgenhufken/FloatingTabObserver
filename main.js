@@ -12,22 +12,29 @@ const { startFirefoxBridge } = require('./fx_bridge')
 const isMac = process.platform === 'darwin'
 const isWin = process.platform === 'win32'
 let settings = loadSettings()
-
-// macOS AppleScript helpers
-const BUNDLE_ID_TO_NAME = { 'com.google.Chrome': 'Google Chrome', 'com.brave.Browser': 'Brave Browser', 'com.microsoft.edgemac': 'Microsoft Edge', 'com.vivaldi.Vivaldi': 'Vivaldi', 'com.apple.Safari': 'Safari' }
+const WS_PORT = 17332
+const WS_TOKEN = process.env.WS_TOKEN || ''
+const JSON_PATH = path.join(os.homedir(), 'Documents', 'clipper_active_tab.json')
+let wss
+let win, lastFP = ''
+const fp = (p) => [p.browser || '', p.title || '', p.url || '', p.audible ? '1' : '0'].join('\u0001')
 
 let activeWinGetter
-function getActiveWin () {
+async function loadActiveWin () {
   if (activeWinGetter === undefined) {
     try {
-      const mod = require('active-win')
-      activeWinGetter = mod?.activeWindow || null
+      const mod = await import('active-win')
+      activeWinGetter = mod?.activeWindow || mod?.default || null
     } catch {
       activeWinGetter = null
     }
   }
   return activeWinGetter
 }
+
+// macOS AppleScript helpers
+const BUNDLE_ID_TO_NAME = { 'com.google.Chrome': 'Google Chrome', 'com.brave.Browser': 'Brave Browser', 'com.microsoft.edgemac': 'Microsoft Edge', 'com.vivaldi.Vivaldi': 'Vivaldi', 'com.apple.Safari': 'Safari' }
+
 const AS_FRONT_APP_BUNDLE = `tell application "System Events"
   set frontApp to name of first process whose frontmost is true
 end tell
@@ -69,35 +76,44 @@ async function macTabInfo (bundleId) {
   return { title, url, audible: audibleStr.toLowerCase() === 'true', browser: BUNDLE_ID_TO_NAME[bundleId], source:'applescript' }
 }
 
-// IPC sinks (broadcast + JSON)
-const WS_PORT = 17332
-const WS_TOKEN = process.env.WS_TOKEN || ''  // optional
-const JSON_PATH = path.join(os.homedir(), 'Documents', 'clipper_active_tab.json')
-let wss
-function startWS () {
+function writeJSONFileAtomic (payload) {
   try {
-    wss = new WebSocketServer({ host: '127.0.0.1', port: WS_PORT })
-    // optional token auth
-    if (WS_TOKEN) {
-      wss.on('connection', (ws, req) => {
-        try {
-          const u = new URL(req.url, 'ws://127.0.0.1')
-          const t = u.searchParams.get('token') || ''
-          if (t !== WS_TOKEN) { try { ws.close(1008, 'invalid token') } catch {} }
-        } catch {}
-      })
-    }
-  } catch { wss = null }
+    const tmp = JSON_PATH + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2))
+    fs.renameSync(tmp, JSON_PATH)
+  } catch {}
 }
+
 function broadcastWS (payload) {
   if (!wss) return
   const msg = JSON.stringify(payload)
   for (const c of wss.clients) { try { c.send(msg) } catch {} }
 }
-function writeJSONFile (payload) { try { fs.writeFileSync(JSON_PATH, JSON.stringify(payload, null, 2)) } catch {} }
 
-let win, lastFP = ''
-const fp = (p) => [p.browser||'', p.title||'', p.url||'', p.audible?'1':'0'].join('\u0001')
+function startWS () {
+  try {
+    wss = new WebSocketServer({ host: '127.0.0.1', port: WS_PORT })
+    wss.on('connection', (ws, req) => {
+      if (!WS_TOKEN) return
+      try {
+        const u = new URL(req.url, 'ws://127.0.0.1')
+        const t = u.searchParams.get('token') || ''
+        if (t !== WS_TOKEN) {
+          try { ws.send(JSON.stringify({ type: 'error', reason: 'invalid_token' })) } catch {}
+          try { ws.close(1008, 'invalid token') } catch {}
+        }
+      } catch {}
+    })
+    const iv = setInterval(() => {
+      for (const c of wss.clients) { try { c.ping() } catch {} }
+    }, 20000)
+    wss.on('close', () => clearInterval(iv))
+  } catch (e) {
+    console.error('[WS] bind failed on', WS_PORT, e?.message)
+    try { win?.webContents?.send('status', { type: 'error', msg: `WS poort ${WS_PORT} bezet` }) } catch {}
+    wss = null
+  }
+}
 
 async function createWindow () {
   const b = settings.bounds || { x:40, y:60, width:500, height:96 }
@@ -109,28 +125,46 @@ async function createWindow () {
   try { if (isMac) win.showInactive(); else win.show() } catch { win.show() }
   applyClickThrough(settings.clickThrough)
   win.webContents.send('mode', { compact: !!settings.compact })
+
   startWS()
-  startFirefoxBridge((payload)=>{ emit({ ...payload, browser: payload.browser || 'firefox' }) })  // Firefox inbound
-  setInterval(loop, 300)  // 300ms default
+  try { startFirefoxBridge((payload) => { emitCoalesced({ ...payload, browser: payload.browser || 'firefox' }, emit) }) } catch {}
+  setInterval(loop, 300)
 }
 
 function saveBounds () { try { const [x,y]=win.getPosition(); const [width,height]=win.getSize(); settings.bounds={x,y,width,height}; saveSettings(settings) } catch {} }
 function applyClickThrough (on) { settings.clickThrough=!!on; saveSettings(settings); try { win.setIgnoreMouseEvents(!!on,{forward:true}) } catch {} }
 function toggleCompact () { settings.compact=!settings.compact; saveSettings(settings); win.webContents.send('mode',{compact:!!settings.compact}) }
 
+function clampBounds () {
+  try {
+    const [x, y] = win.getPosition()
+    const [w, h] = win.getSize()
+    if (x < -5000 || y < -5000) win.setPosition(40, 60)
+    if (w < 260) win.setSize(300, h)
+  } catch {}
+}
+app.on('browser-window-focus', clampBounds)
+
+let emitTimer = null; let lastOut = null
+function emitCoalesced (payload, sendFn) {
+  lastOut = payload
+  if (emitTimer) return
+  emitTimer = setTimeout(() => { emitTimer = null; sendFn(lastOut) }, 120)
+}
+
 function emit (payload) {
   const out = { ...payload, ts: Date.now(), source: payload.source || payload._source || 'unknown' }
   const cur = fp(out)
-  if (cur===lastFP) return
-  lastFP=cur
+  if (cur === lastFP) return
+  lastFP = cur
   try { win?.webContents?.send('tab-info', out) } catch {}
-  writeJSONFile(out)
+  writeJSONFileAtomic(out)
   broadcastWS(out)
 }
 
 async function loop () {
   const payload = await readActiveTab()
-  if (payload) emit(payload)
+  if (payload) emitCoalesced(payload, emit)
 }
 
 let automationRequested = false
@@ -159,7 +193,7 @@ async function readActiveTab () {
     return info
   }
   if (isWin) {
-    const activeWin = getActiveWin()
+    const activeWin = await loadActiveWin()
     if (!activeWin) return null
     const act = await activeWin()
     const proc = (act?.owner?.name || '').toLowerCase()
@@ -172,7 +206,8 @@ async function readActiveTab () {
       if (match) {
         const url = match.url || ''
         const browser = proc.replace('.exe','')
-        return { browser, title, url, audible: false, source:'cdp' }
+        const audible = !!match.audible
+        return { browser, title, url, audible, source:'cdp' }
       }
     }
     return { browser: act?.owner?.name || '', title, url: '', audible: false, source:'active-win' }

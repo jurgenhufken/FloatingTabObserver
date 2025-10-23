@@ -53,6 +53,7 @@ npm install
 - **JSON feed**: `~/Documents/clipper_active_tab.json` (macOS/ Windows). Wordt overschreven met de laatst bekende tab.
 - **WebSocket**: `ws://127.0.0.1:17332` (`WS_TOKEN` optioneel via env var). Zie `examples/clipper_ws_listener.py` en `examples/selektor_adapter.js`.
 - **Polling fallback**: `examples/clipper_poll_listener.py` toont hoe je het JSON-bestand kunt monitoren.
+- **Client feedback**: bij een fout token stuurt de server `{ type: 'error', reason: 'invalid_token' }` voordat de socket sluit. Clients moeten dit afhandelen.
 
 ## Omgevingsvariabelen
 - `WS_TOKEN`: wanneer gezet, moeten WebSocket-clients `?token=XYZ` meegeven (zie `main.js`).
@@ -63,6 +64,7 @@ npm install
 - **Port conflicts**: poorten `17332` (overlay) en `17334` (Firefox) moeten vrij zijn. Gebruik `lsof -i :17332` om processen te vinden.
 - **Firefox toont enkel kort info**: Zorg dat `main.js` (v1.2 patch) actief is en dat de Firefox add-on opnieuw geladen is na updates.
 - **Windows CDP**: wanneer `findChromiumTargets()` niets vindt, herstart browser met `--remote-debugging-port=9222` of gebruik `launchers/` scripts.
+- **Invalid token status**: overlay toont onderaan een foutmelding wanneer een WS-client met een verkeerd token verbind. Pas `WS_TOKEN` aan of update clients.
 
 ## Verdere documentatie
 - `WINDSURF_GUIDE.md`: bevat scenario-specifiche instructies voor Windsurf integraties.
