@@ -1,0 +1,9 @@
+{
+  "manifest_version": 2,
+  "name": "Floating Tab Observer Bridge",
+  "version": "1.2",
+  "description": "Push active tab info to local Floating Tab Observer (ws://127.0.0.1:17334)",
+  "applications": { "gecko": { "id": "floating-tab-observer@local" } },
+  "permissions": ["tabs", "activeTab", "webNavigation"],
+  "background": { "scripts": ["background.js"] }
+}

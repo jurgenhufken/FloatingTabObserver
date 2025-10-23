@@ -1,0 +1,10 @@
+{
+  "name": "floating-tab-observer",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Floating, focus-safe overlay + Clipper IPC + settings + hotkeys (Win/mac) + Firefox, Windsurf guide, Selektor adapter",
+  "main": "main.js",
+  "scripts": { "start": "electron ." },
+  "dependencies": { "active-win": "^9.0.0", "ws": "^8.18.0" },
+  "devDependencies": { "electron": "^31.3.0" }
+}
