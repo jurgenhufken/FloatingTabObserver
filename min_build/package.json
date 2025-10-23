@@ -1,0 +1,9 @@
+{
+  "name": "floating-clipper-min",
+  "version": "1.0.1",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": { "start": "electron ." },
+  "dependencies": {},
+  "devDependencies": { "electron": "^31.3.0" }
+}
